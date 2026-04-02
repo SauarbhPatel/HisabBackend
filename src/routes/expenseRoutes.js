@@ -9,12 +9,12 @@ const {
 
 router.use(protect);
 
-router.get   ('/',                          getExpenses);
-router.post  ('/',                          createExpense);
-router.get   ('/report/monthly',            getMonthlyReport);
-router.get   ('/category/:category',        getByCategory);
-router.get   ('/:id',                       getExpense);
-router.patch ('/:id',                       updateExpense);
-router.delete('/:id',                       deleteExpense);
+router.get   ('/',                   getExpenses);
+router.post  ('/',                   createExpense);
+router.get   ('/report/monthly',     getMonthlyReport);
+router.get   ('/category/:category', getByCategory);
+router.get   ('/:id',                getExpense);
+router.patch ('/:id',                updateExpense);
+router.delete('/:id',                deleteExpense);
 
 module.exports = router;

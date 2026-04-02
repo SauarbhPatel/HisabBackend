@@ -8,11 +8,11 @@ const {
 
 router.use(protect);
 
-router.get   ('/',                      getDevelopers);
-router.post  ('/',                      createDeveloper);
-router.get   ('/:id',                   getDeveloper);
-router.patch ('/:id',                   updateDeveloper);
-router.delete('/:id',                   deleteDeveloper);
-router.get   ('/:id/payment-history',   getDevPaymentHistory);
+router.get   ('/',                    getDevelopers);
+router.post  ('/',                    createDeveloper);
+router.get   ('/:id',                 getDeveloper);
+router.patch ('/:id',                 updateDeveloper);
+router.delete('/:id',                 deleteDeveloper);
+router.get   ('/:id/payment-history', getDevPaymentHistory);
 
 module.exports = router;

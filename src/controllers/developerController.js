@@ -1,5 +1,6 @@
 const Developer = require('../models/Developer');
 const Project   = require('../models/Project');
+const { sendSuccess, sendError } = require('../utils/response');
 
 // GET /api/developers?role=Frontend&status=active&search=Zafran
 exports.getDevelopers = async (req, res, next) => {
@@ -22,12 +23,11 @@ exports.getDevelopers = async (req, res, next) => {
     const totalPaid    = devs.reduce((s, d) => s + d.totalPaid,    0);
     const totalPending = devs.reduce((s, d) => s + d.totalPending, 0);
 
-    res.status(200).json({
-      success: true,
+    return sendSuccess(res, {
       count: devs.length,
       stats: { totalPaid, totalPending },
       developers: devs,
-    });
+    }, 'Developers fetched successfully.');
   } catch (err) { next(err); }
 };
 
@@ -35,15 +35,14 @@ exports.getDevelopers = async (req, res, next) => {
 exports.getDeveloper = async (req, res, next) => {
   try {
     const dev = await Developer.findOne({ _id: req.params.id, owner: req.user.id });
-    if (!dev) return res.status(404).json({ success: false, message: 'Developer not found.' });
+    if (!dev) return sendError(res, 'Developer not found.', '404');
 
-    // Get all projects this dev is on
     const projects = await Project.find({
       owner: req.user.id,
       'developers.developer': dev._id,
     }).select('name client status developers.$');
 
-    res.status(200).json({ success: true, developer: dev, projects });
+    return sendSuccess(res, { developer: dev, projects }, 'Developer fetched successfully.');
   } catch (err) { next(err); }
 };
 
@@ -51,14 +50,12 @@ exports.getDeveloper = async (req, res, next) => {
 exports.createDeveloper = async (req, res, next) => {
   try {
     const { name, phone, upiId, role, notes } = req.body;
-    if (!name || name.trim().length < 2) {
-      return res.status(400).json({ success: false, message: 'Developer name (min 2 chars) is required.' });
-    }
+    if (!name || name.trim().length < 2)
+      return sendError(res, 'Developer name (min 2 chars) is required.', '400');
 
-    // Check for duplicate phone under same owner
     if (phone) {
       const existing = await Developer.findOne({ owner: req.user.id, phone });
-      if (existing) return res.status(409).json({ success: false, message: 'A developer with this phone already exists.' });
+      if (existing) return sendError(res, 'A developer with this phone already exists.', '409');
     }
 
     const dev = await Developer.create({
@@ -70,7 +67,7 @@ exports.createDeveloper = async (req, res, next) => {
       notes: notes || undefined,
     });
 
-    res.status(201).json({ success: true, message: 'Developer added.', developer: dev });
+    return sendSuccess(res, { developer: dev }, 'Developer added successfully.');
   } catch (err) { next(err); }
 };
 
@@ -81,49 +78,47 @@ exports.updateDeveloper = async (req, res, next) => {
     const updates = {};
     allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
 
-    if (updates.status && !['active', 'inactive'].includes(updates.status)) {
-      return res.status(400).json({ success: false, message: 'status must be active or inactive.' });
-    }
+    if (updates.status && !['active', 'inactive'].includes(updates.status))
+      return sendError(res, 'status must be active or inactive.', '400');
 
     const dev = await Developer.findOneAndUpdate(
       { _id: req.params.id, owner: req.user.id },
       { $set: updates },
       { new: true, runValidators: true }
     );
-    if (!dev) return res.status(404).json({ success: false, message: 'Developer not found.' });
-    res.status(200).json({ success: true, message: 'Developer updated.', developer: dev });
+    if (!dev) return sendError(res, 'Developer not found.', '404');
+    return sendSuccess(res, { developer: dev }, 'Developer updated successfully.');
   } catch (err) { next(err); }
 };
 
 // DELETE /api/developers/:id
 exports.deleteDeveloper = async (req, res, next) => {
   try {
-    // Check dev is not on any active project
     const activeProject = await Project.findOne({
       owner: req.user.id,
       'developers.developer': req.params.id,
-      'developers.status': 'active',
+      'developers.status':    'active',
       status: { $in: ['inprogress', 'onstay'] },
     });
-    if (activeProject) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot delete — developer is active on "${activeProject.name}". Pause or remove them first.`,
-      });
-    }
+
+    if (activeProject)
+      return sendError(
+        res,
+        `Cannot delete — developer is active on "${activeProject.name}". Pause or remove them first.`,
+        '400'
+      );
 
     const dev = await Developer.findOneAndDelete({ _id: req.params.id, owner: req.user.id });
-    if (!dev) return res.status(404).json({ success: false, message: 'Developer not found.' });
-    res.status(200).json({ success: true, message: 'Developer removed.' });
+    if (!dev) return sendError(res, 'Developer not found.', '404');
+    return sendSuccess(res, null, 'Developer removed successfully.');
   } catch (err) { next(err); }
 };
 
 // GET /api/developers/:id/payment-history
-// Full cross-project payment history for one developer
 exports.getDevPaymentHistory = async (req, res, next) => {
   try {
     const dev = await Developer.findOne({ _id: req.params.id, owner: req.user.id });
-    if (!dev) return res.status(404).json({ success: false, message: 'Developer not found.' });
+    if (!dev) return sendError(res, 'Developer not found.', '404');
 
     const projects = await Project.find({
       owner: req.user.id,
@@ -157,11 +152,10 @@ exports.getDevPaymentHistory = async (req, res, next) => {
       return slot ? s + (slot.agreedAmount - slot.paidAmount) : s;
     }, 0);
 
-    res.status(200).json({
-      success: true,
+    return sendSuccess(res, {
       developer: { id: dev._id, name: dev.name, role: dev.role },
-      stats: { totalPaid, totalPending },
+      stats:     { totalPaid, totalPending },
       history,
-    });
+    }, 'Developer payment history fetched successfully.');
   } catch (err) { next(err); }
 };

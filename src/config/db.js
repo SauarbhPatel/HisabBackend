@@ -12,13 +12,7 @@ const connectDB = async () => {
   }
 };
 
-// Handle connection events
-mongoose.connection.on('disconnected', () => {
-  console.warn('⚠️  MongoDB disconnected');
-});
-
-mongoose.connection.on('reconnected', () => {
-  console.log('🔄 MongoDB reconnected');
-});
+mongoose.connection.on('disconnected', () => { console.warn('⚠️  MongoDB disconnected'); });
+mongoose.connection.on('reconnected',  () => { console.log('🔄 MongoDB reconnected'); });
 
 module.exports = connectDB;

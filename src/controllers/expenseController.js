@@ -1,4 +1,5 @@
 const Expense = require('../models/Expense');
+const { sendSuccess, sendError } = require('../utils/response');
 
 const CATEGORY_ICONS = {
   food: '🍕', travel: '🚌', bills: '⚡', entertainment: '🎬',
@@ -7,19 +8,15 @@ const CATEGORY_ICONS = {
   fuel: '⛽', recharge: '📱', trip: '✈️', other: '➕',
 };
 
-// ─── Helper: build month key ──────────────────────────────────
 const toMonthKey = (year, month) =>
   `${year}-${String(month).padStart(2, '0')}`;
 
-// ─────────────────────────────────────────────────────────────
 // GET /api/expenses?month=2026-03&category=food
-// ─────────────────────────────────────────────────────────────
 exports.getExpenses = async (req, res, next) => {
   try {
     const { month, category, splitType } = req.query;
     const filter = { owner: req.user.id };
 
-    // Default to current month if not specified
     const monthKey = month || toMonthKey(
       new Date().getFullYear(),
       new Date().getMonth() + 1
@@ -31,7 +28,6 @@ exports.getExpenses = async (req, res, next) => {
 
     const expenses = await Expense.find(filter).sort({ date: -1 });
 
-    // Category breakdown
     const byCategory = {};
     let totalAmount = 0;
 
@@ -44,21 +40,17 @@ exports.getExpenses = async (req, res, next) => {
       byCategory[e.category].count += 1;
     });
 
-    res.status(200).json({
-      success: true,
+    return sendSuccess(res, {
       monthKey,
       totalAmount,
       count: expenses.length,
       byCategory,
       expenses,
-    });
+    }, 'Expenses fetched successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // GET /api/expenses/category/:category?month=2026-03
-// All entries for one category
-// ─────────────────────────────────────────────────────────────
 exports.getByCategory = async (req, res, next) => {
   try {
     const { month } = req.query;
@@ -72,39 +64,33 @@ exports.getByCategory = async (req, res, next) => {
 
     const total = expenses.reduce((s, e) => s + e.amount, 0);
 
-    res.status(200).json({
-      success: true,
+    return sendSuccess(res, {
       category: req.params.category,
       icon:     CATEGORY_ICONS[req.params.category] || '➕',
       monthKey,
       total,
       count: expenses.length,
       expenses,
-    });
+    }, 'Category expenses fetched successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // GET /api/expenses/:id
-// ─────────────────────────────────────────────────────────────
 exports.getExpense = async (req, res, next) => {
   try {
     const expense = await Expense.findOne({ _id: req.params.id, owner: req.user.id });
-    if (!expense) return res.status(404).json({ success: false, message: 'Expense not found.' });
-    res.status(200).json({ success: true, expense });
+    if (!expense) return sendError(res, 'Expense not found.', '404');
+    return sendSuccess(res, { expense }, 'Expense fetched successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // POST /api/expenses
-// ─────────────────────────────────────────────────────────────
 exports.createExpense = async (req, res, next) => {
   try {
     const { amount, category, description, date, paidVia, splitType, note } = req.body;
 
-    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-      return res.status(400).json({ success: false, message: 'Valid amount is required.' });
-    }
+    if (!amount || isNaN(Number(amount)) || Number(amount) <= 0)
+      return sendError(res, 'Valid amount is required.', '400');
 
     const expense = await Expense.create({
       owner:       req.user.id,
@@ -117,13 +103,11 @@ exports.createExpense = async (req, res, next) => {
       note:        note       || undefined,
     });
 
-    res.status(201).json({ success: true, message: 'Expense added.', expense });
+    return sendSuccess(res, { expense }, 'Expense added successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // PATCH /api/expenses/:id
-// ─────────────────────────────────────────────────────────────
 exports.updateExpense = async (req, res, next) => {
   try {
     const allowed = ['amount', 'category', 'description', 'date', 'paidVia', 'splitType', 'note'];
@@ -136,31 +120,25 @@ exports.updateExpense = async (req, res, next) => {
       { $set: updates },
       { new: true, runValidators: true }
     );
-    if (!expense) return res.status(404).json({ success: false, message: 'Expense not found.' });
-    res.status(200).json({ success: true, message: 'Expense updated.', expense });
+    if (!expense) return sendError(res, 'Expense not found.', '404');
+    return sendSuccess(res, { expense }, 'Expense updated successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // DELETE /api/expenses/:id
-// ─────────────────────────────────────────────────────────────
 exports.deleteExpense = async (req, res, next) => {
   try {
     const expense = await Expense.findOneAndDelete({ _id: req.params.id, owner: req.user.id });
-    if (!expense) return res.status(404).json({ success: false, message: 'Expense not found.' });
-    res.status(200).json({ success: true, message: 'Expense deleted.' });
+    if (!expense) return sendError(res, 'Expense not found.', '404');
+    return sendSuccess(res, null, 'Expense deleted successfully.');
   } catch (err) { next(err); }
 };
 
-// ─────────────────────────────────────────────────────────────
 // GET /api/expenses/report/monthly?months=6
-// Last N months breakdown
-// ─────────────────────────────────────────────────────────────
 exports.getMonthlyReport = async (req, res, next) => {
   try {
     const months = Math.min(Number(req.query.months) || 6, 24);
 
-    // Build list of last N month keys
     const keys = [];
     const now  = new Date();
     for (let i = 0; i < months; i++) {
@@ -173,7 +151,6 @@ exports.getMonthlyReport = async (req, res, next) => {
       monthKey: { $in: keys },
     });
 
-    // Group by month
     const report = {};
     keys.forEach(k => { report[k] = { total: 0, byCategory: {} }; });
 
@@ -185,6 +162,6 @@ exports.getMonthlyReport = async (req, res, next) => {
       report[e.monthKey].byCategory[e.category] += e.amount;
     });
 
-    res.status(200).json({ success: true, months: months, report });
+    return sendSuccess(res, { months, report }, 'Monthly report fetched successfully.');
   } catch (err) { next(err); }
 };

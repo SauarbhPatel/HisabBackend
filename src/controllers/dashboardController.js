@@ -2,9 +2,9 @@ const Expense   = require('../models/Expense');
 const Project   = require('../models/Project');
 const Friend    = require('../models/Friend');
 const Group     = require('../models/Group');
+const { sendSuccess, sendError } = require('../utils/response');
 
 // GET /api/dashboard
-// Returns all home screen stats in one call
 exports.getDashboard = async (req, res, next) => {
   try {
     const userId   = req.user.id;
@@ -14,7 +14,7 @@ exports.getDashboard = async (req, res, next) => {
 
     const result = { useCase };
 
-    // ── SPLIT: Expenses + Friends + Groups ───────────────────
+    // ── SPLIT ───────────────────────────────────────────────
     if (useCase === 'split' || useCase === 'both') {
       const [expenses, friends, groups] = await Promise.all([
         Expense.find({ owner: userId, monthKey }),
@@ -22,13 +22,12 @@ exports.getDashboard = async (req, res, next) => {
         Group.find({ 'members.user': userId, isActive: true }),
       ]);
 
-      const totalSpent    = expenses.reduce((s, e) => s + e.amount, 0);
-      const owedToYou     = friends.filter(f => f.balance > 0).reduce((s, f) => s + f.balance, 0);
-      const youOwe        = friends.filter(f => f.balance < 0).reduce((s, f) => s + Math.abs(f.balance), 0);
-      const activeGroups  = groups.length;
+      const totalSpent   = expenses.reduce((s, e) => s + e.amount, 0);
+      const owedToYou    = friends.filter(f => f.balance > 0).reduce((s, f) => s + f.balance, 0);
+      const youOwe       = friends.filter(f => f.balance < 0).reduce((s, f) => s + Math.abs(f.balance), 0);
+      const activeGroups = groups.length;
 
-      // Find most overdue friend (largest positive balance, oldest)
-      const urgentFriend  = friends
+      const urgentFriend = friends
         .filter(f => f.balance > 0)
         .sort((a, b) => b.balance - a.balance)[0];
 
@@ -46,7 +45,7 @@ exports.getDashboard = async (req, res, next) => {
       };
     }
 
-    // ── FREELANCE: Projects + Developers ─────────────────────
+    // ── FREELANCE ────────────────────────────────────────────
     if (useCase === 'freelance' || useCase === 'both') {
       const projects = await Project.find({ owner: userId, isArchived: false });
 
@@ -54,7 +53,6 @@ exports.getDashboard = async (req, res, next) => {
       const totalPending   = projects.reduce((s, p) => s + p.pendingAmount, 0);
       const activeProjects = projects.filter(p => p.status === 'inprogress').length;
 
-      // Total dev payments due
       let devPayDue = 0;
       projects.forEach(p => {
         p.developers.forEach(d => {
@@ -62,31 +60,29 @@ exports.getDashboard = async (req, res, next) => {
         });
       });
 
-      // Most urgent: project with largest pending client payment
       const urgentProject = projects
         .filter(p => p.pendingAmount > 0)
         .sort((a, b) => b.pendingAmount - a.pendingAmount)[0];
 
-      // Income by client this month
       const thisMonthProjects = projects.filter(p => {
         const d = p.startDate;
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}` === monthKey;
       });
 
       result.freelance = {
-        totalReceived:  +totalReceived.toFixed(2),
-        totalPending:   +totalPending.toFixed(2),
-        devPayDue:      +devPayDue.toFixed(2),
+        totalReceived:   +totalReceived.toFixed(2),
+        totalPending:    +totalPending.toFixed(2),
+        devPayDue:       +devPayDue.toFixed(2),
         activeProjects,
-        totalProjects:  projects.length,
-        urgentProject:  urgentProject
+        totalProjects:   projects.length,
+        urgentProject:   urgentProject
           ? { name: urgentProject.name, pending: urgentProject.pendingAmount }
           : null,
         thisMonthIncome: thisMonthProjects.reduce((s, p) => s + p.receivedAmount, 0),
       };
     }
 
-    // ── Recent Activity (last 5 transactions of any type) ────
+    // ── Recent Activity ──────────────────────────────────────
     const recentExpenses = await Expense.find({ owner: userId })
       .sort({ date: -1 }).limit(5)
       .select('amount category description date paidVia');
@@ -94,6 +90,6 @@ exports.getDashboard = async (req, res, next) => {
     result.recentExpenses = recentExpenses;
     result.generatedAt    = new Date();
 
-    res.status(200).json({ success: true, dashboard: result });
+    return sendSuccess(res, { dashboard: result }, 'Dashboard fetched successfully.');
   } catch (err) { next(err); }
 };

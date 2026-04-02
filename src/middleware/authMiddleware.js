@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { sendError } = require('../utils/response');
 
 // ─── Protect: require valid JWT ───────────────────────────────
 const protect = async (req, res, next) => {
@@ -13,40 +14,24 @@ const protect = async (req, res, next) => {
       token = req.headers.authorization.split(' ')[1];
     }
 
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized. Please login first.',
-      });
-    }
+    if (!token)
+      return sendError(res, 'Not authorized. Please login first.', '401');
 
-    // Verify token
     let decoded;
     try {
       decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
-      if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          message: 'Session expired. Please login again.',
-          code: 'TOKEN_EXPIRED',
-        });
-      }
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token. Please login again.',
-        code: 'TOKEN_INVALID',
-      });
+      if (err.name === 'TokenExpiredError')
+        return sendError(res, 'Session expired. Please login again.', '401');
+      return sendError(res, 'Invalid token. Please login again.', '401');
     }
 
     const user = await User.findById(decoded.id);
 
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Account no longer exists.' });
-    }
-    if (!user.isActive) {
-      return res.status(401).json({ success: false, message: 'Account is deactivated. Contact support.' });
-    }
+    if (!user)
+      return sendError(res, 'Account no longer exists.', '401');
+    if (!user.isActive)
+      return sendError(res, 'Account is deactivated. Contact support.', '401');
 
     req.user = user;
     next();
@@ -57,13 +42,8 @@ const protect = async (req, res, next) => {
 
 // ─── Require profile to be complete ──────────────────────────
 const requireCompleteProfile = (req, res, next) => {
-  if (!req.user.isProfileComplete) {
-    return res.status(403).json({
-      success: false,
-      message: 'Please complete your profile setup first.',
-      code: 'PROFILE_INCOMPLETE',
-    });
-  }
+  if (!req.user.isProfileComplete)
+    return sendError(res, 'Please complete your profile setup first.', '403');
   next();
 };
 

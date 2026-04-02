@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { sendSuccess } = require('./response');
 
 // ─── Sign a JWT for a user ────────────────────────────────────
 const signToken = (userId) => {
@@ -12,12 +13,7 @@ const signToken = (userId) => {
 // ─── Send token + user as JSON response ──────────────────────
 const sendTokenResponse = (user, statusCode, res, message = 'Success') => {
   const token = signToken(user._id);
-  res.status(statusCode).json({
-    success: true,
-    message,
-    token,
-    user: user.toPublicJSON(),
-  });
+  return sendSuccess(res, { token, user: user.toPublicJSON() }, message);
 };
 
 module.exports = { signToken, sendTokenResponse };
