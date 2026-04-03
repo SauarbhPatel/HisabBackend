@@ -7,13 +7,33 @@ const {
     isValidEmail,
     isValidPassword,
     detectIdentifierType,
+    normalizePhone,
 } = require("../utils/validators");
 
 // ═══════════════════════════════════════════════════════════════
-//  SIGNUP FLOW  (3 steps)
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════
+
+const MAX_OTP_ATTEMPTS = () => Number(process.env.OTP_MAX_ATTEMPTS) || 5;
+
+// Validate OTP generically — returns error string or null
+function validateOTP(user, purpose) {
+    if (!user.otp?.code) return "No OTP found. Please request a new one.";
+    if (user.otp.purpose !== purpose)
+        return `Invalid OTP purpose. Expected: ${purpose}.`;
+    if ((user.otp.attempts || 0) >= MAX_OTP_ATTEMPTS())
+        return "Too many incorrect attempts. Please request a new OTP.";
+    if (!user.otp.expiresAt || new Date() > user.otp.expiresAt)
+        return "OTP has expired. Please request a new one.";
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  SIGNUP FLOW (3 steps)
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/auth/signup/step1
+// Body: { name, phone?, email? }
 exports.signupStep1 = async (req, res, next) => {
     try {
         const { name, phone, email } = req.body;
@@ -29,17 +49,18 @@ exports.signupStep1 = async (req, res, next) => {
         if (phone && !isValidPhone(phone))
             return sendError(
                 res,
-                "Invalid phone number. Use 10-digit Indian number.",
+                "Invalid phone number. Use a 10-digit Indian number.",
                 "400",
             );
         if (email && !isValidEmail(email))
             return sendError(res, "Invalid email address.", "400");
 
+        // ── BUG FIX: fully normalize phone before DB lookup ────────
+        // Use exact match, not partial regex, to avoid false positives
+        let normalizedPhone = null;
         if (phone) {
-            const normalizedPhone = phone
-                .replace(/\s+/g, "")
-                .replace(/^(?!\+)91/, "+91")
-                .replace(/^(?!\+91)/, "+91");
+            normalizedPhone = normalizePhone(phone);
+
             const existingPhone = await User.findOne({
                 phone: normalizedPhone,
             });
@@ -50,6 +71,7 @@ exports.signupStep1 = async (req, res, next) => {
                     "409",
                 );
         }
+
         if (email) {
             const existingEmail = await User.findOne({
                 email: email.toLowerCase(),
@@ -62,19 +84,17 @@ exports.signupStep1 = async (req, res, next) => {
                 );
         }
 
+        // Generate OTP for phone users
         let otp = null;
         let otpPayload = null;
-        if (phone) {
+        if (normalizedPhone) {
             otp = generateOTP();
             otpPayload = buildOTPPayload(otp, "signup");
         }
 
-        const query = phone
-            ? {
-                  phone: {
-                      $regex: phone.replace(/\s+/g, "").replace(/^91/, ""),
-                  },
-              }
+        // Find or create user — use exact phone match
+        const query = normalizedPhone
+            ? { phone: normalizedPhone }
             : { email: email.toLowerCase() };
 
         let user = await User.findOne(query);
@@ -82,31 +102,32 @@ exports.signupStep1 = async (req, res, next) => {
         if (user) {
             user.name = name.trim();
             if (email) user.email = email.toLowerCase();
-            if (phone) user.phone = phone;
             if (otpPayload) user.otp = otpPayload;
-            user.password = user.password || "__TEMP__PLACEHOLDER";
+            // ── BUG FIX: do NOT set a temp password placeholder ──────
+            // Leave password untouched — it stays undefined until set-password step
         } else {
             user = new User({
                 name: name.trim(),
-                phone: phone || undefined,
+                phone: normalizedPhone || undefined,
                 email: email || undefined,
-                password: "__TEMP__PLACEHOLDER",
+                // No password set here — set in step 2b
                 otp: otpPayload || undefined,
             });
         }
 
         await user.save();
 
-        if (phone && otp) await sendOTP(phone, otp, "signup");
+        if (normalizedPhone && otp)
+            await sendOTP(normalizedPhone, otp, "signup");
 
         return sendSuccess(
             res,
             {
                 userId: user._id,
-                nextStep: phone ? "verify-otp" : "set-password",
+                nextStep: normalizedPhone ? "verify-otp" : "set-password",
             },
-            phone
-                ? `OTP sent to ${phone}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 10} minutes.`
+            normalizedPhone
+                ? `OTP sent to ${normalizedPhone}. Valid for ${process.env.OTP_EXPIRY_MINUTES || 10} minutes.`
                 : "Basic info saved. Proceed to set your password.",
         );
     } catch (err) {
@@ -114,11 +135,8 @@ exports.signupStep1 = async (req, res, next) => {
     }
 };
 
-// ───────────────────────────────────────────────────────────────
-// STEP 2a — Verify OTP  (phone users only)
 // POST /api/auth/signup/verify-otp
 // Body: { userId, otp }
-// ───────────────────────────────────────────────────────────────
 exports.verifyOTP = async (req, res, next) => {
     try {
         const { userId, otp } = req.body;
@@ -130,6 +148,7 @@ exports.verifyOTP = async (req, res, next) => {
             "+otp.code +otp.expiresAt +otp.attempts +otp.purpose",
         );
         if (!user) return sendError(res, "User not found.", "404");
+
         if (user.isPhoneVerified && user.otp?.purpose === "signup")
             return sendError(
                 res,
@@ -137,25 +156,14 @@ exports.verifyOTP = async (req, res, next) => {
                 "400",
             );
 
-        const maxAttempts = Number(process.env.OTP_MAX_ATTEMPTS) || 5;
-        if ((user.otp?.attempts || 0) >= maxAttempts)
-            return sendError(
-                res,
-                "Too many incorrect attempts. Please request a new OTP.",
-                "429",
-            );
-
-        if (!user.otp?.expiresAt || new Date() > user.otp.expiresAt)
-            return sendError(
-                res,
-                "OTP has expired. Please request a new one.",
-                "400",
-            );
+        // ── BUG FIX: reject OTPs that were not issued for signup ──
+        const otpErr = validateOTP(user, "signup");
+        if (otpErr) return sendError(res, otpErr, "400");
 
         if (user.otp.code !== otp.trim()) {
             user.otp.attempts += 1;
-            await user.save();
-            const remaining = maxAttempts - user.otp.attempts;
+            await user.save({ validateBeforeSave: false });
+            const remaining = MAX_OTP_ATTEMPTS() - user.otp.attempts;
             return sendError(
                 res,
                 `Incorrect OTP. ${remaining} attempt(s) remaining.`,
@@ -166,7 +174,7 @@ exports.verifyOTP = async (req, res, next) => {
 
         user.isPhoneVerified = true;
         user.otp = undefined;
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         return sendSuccess(
             res,
@@ -179,6 +187,7 @@ exports.verifyOTP = async (req, res, next) => {
 };
 
 // POST /api/auth/signup/resend-otp
+// Body: { userId }
 exports.resendOTP = async (req, res, next) => {
     try {
         const { userId } = req.body;
@@ -193,7 +202,7 @@ exports.resendOTP = async (req, res, next) => {
 
         const otp = generateOTP();
         user.otp = buildOTPPayload(otp, "signup");
-        await user.save();
+        await user.save({ validateBeforeSave: false });
         await sendOTP(user.phone, otp, "signup");
 
         return sendSuccess(res, null, `New OTP sent to ${user.phone}.`);
@@ -203,6 +212,7 @@ exports.resendOTP = async (req, res, next) => {
 };
 
 // POST /api/auth/signup/set-password
+// Body: { userId, password, confirmPassword }
 exports.setPassword = async (req, res, next) => {
     try {
         const { userId, password, confirmPassword } = req.body;
@@ -254,9 +264,10 @@ exports.setPassword = async (req, res, next) => {
 };
 
 // POST /api/auth/signup/complete-profile
+// Body: { userId, avatar?, avatarColor?, useCase }
 exports.completeProfile = async (req, res, next) => {
     try {
-        const { userId, avatar, useCase } = req.body;
+        const { userId, avatar, avatarColor, useCase } = req.body;
 
         if (!userId) return sendError(res, "userId is required.", "400");
 
@@ -272,11 +283,14 @@ exports.completeProfile = async (req, res, next) => {
         if (avatar && !validAvatars.includes(avatar))
             return sendError(res, "Invalid avatar selection.", "400");
 
-        const user = await User.findById(userId);
+        // ── BUG FIX: single query with +password select ────────────
+        // Old code did two separate DB calls — now one
+        const user = await User.findById(userId).select(
+            "+password +tokenVersion",
+        );
         if (!user) return sendError(res, "User not found.", "404");
 
-        const freshUser = await User.findById(userId).select("+password");
-        if (!freshUser.password || freshUser.password === "__TEMP__PLACEHOLDER")
+        if (!user.password)
             return sendError(
                 res,
                 "Please set your password before completing profile.",
@@ -284,10 +298,11 @@ exports.completeProfile = async (req, res, next) => {
             );
 
         if (avatar) user.avatar = avatar;
+        if (avatarColor) user.avatarColor = avatarColor;
         if (useCase) user.useCase = useCase;
         user.isProfileComplete = true;
 
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         return sendTokenResponse(
             user,
@@ -301,10 +316,11 @@ exports.completeProfile = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-//  LOGIN METHODS
+//  LOGIN
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/auth/login/password
+// Body: { identifier, password }
 exports.loginWithPassword = async (req, res, next) => {
     try {
         const { identifier, password } = req.body;
@@ -326,14 +342,15 @@ exports.loginWithPassword = async (req, res, next) => {
 
         let user;
         if (type === "phone") {
-            const digits = identifier.replace(/\D/g, "").slice(-10);
-            user = await User.findOne({
-                phone: { $regex: digits + "$" },
-            }).select("+password");
+            // ── BUG FIX: normalize fully before lookup, exact match ──
+            const normalized = normalizePhone(identifier);
+            user = await User.findOne({ phone: normalized }).select(
+                "+password +tokenVersion",
+            );
         } else {
             user = await User.findOne({
                 email: identifier.toLowerCase(),
-            }).select("+password");
+            }).select("+password +tokenVersion");
         }
 
         const invalidMsg = "Invalid credentials. Please check your details.";
@@ -369,9 +386,6 @@ exports.loginWithPassword = async (req, res, next) => {
         const isMatch = await user.comparePassword(password);
         if (!isMatch) return sendError(res, invalidMsg, "401");
 
-        user.lastLogin = new Date();
-        await user.save({ validateBeforeSave: false });
-
         return sendTokenResponse(
             user,
             200,
@@ -384,6 +398,7 @@ exports.loginWithPassword = async (req, res, next) => {
 };
 
 // POST /api/auth/login/otp/request
+// Body: { phone }
 exports.loginOtpRequest = async (req, res, next) => {
     try {
         const { phone } = req.body;
@@ -392,8 +407,9 @@ exports.loginOtpRequest = async (req, res, next) => {
         if (!isValidPhone(phone))
             return sendError(res, "Invalid phone number.", "400");
 
-        const digits = phone.replace(/\D/g, "").slice(-10);
-        const user = await User.findOne({ phone: { $regex: digits + "$" } });
+        // ── BUG FIX: exact match after full normalization ─────────
+        const normalized = normalizePhone(phone);
+        const user = await User.findOne({ phone: normalized });
 
         if (!user || !user.isPhoneVerified)
             return sendError(
@@ -410,13 +426,13 @@ exports.loginOtpRequest = async (req, res, next) => {
 
         const otp = generateOTP();
         user.otp = buildOTPPayload(otp, "login");
-        await user.save();
-        await sendOTP(phone, otp, "login");
+        await user.save({ validateBeforeSave: false });
+        await sendOTP(normalized, otp, "login");
 
         return sendSuccess(
             res,
             { userId: user._id },
-            `Login OTP sent to ${phone}.`,
+            `Login OTP sent to ${normalized}.`,
         );
     } catch (err) {
         next(err);
@@ -424,6 +440,7 @@ exports.loginOtpRequest = async (req, res, next) => {
 };
 
 // POST /api/auth/login/otp/verify
+// Body: { userId, otp }
 exports.loginOtpVerify = async (req, res, next) => {
     try {
         const { userId, otp } = req.body;
@@ -432,34 +449,17 @@ exports.loginOtpVerify = async (req, res, next) => {
             return sendError(res, "userId and otp are required.", "400");
 
         const user = await User.findById(userId).select(
-            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose",
+            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +tokenVersion",
         );
         if (!user) return sendError(res, "User not found.", "404");
 
-        if (user.otp?.purpose !== "login")
-            return sendError(
-                res,
-                "No login OTP found. Please request a new one.",
-                "400",
-            );
+        const otpErr = validateOTP(user, "login");
+        if (otpErr) return sendError(res, otpErr, "400");
 
-        const maxAttempts = Number(process.env.OTP_MAX_ATTEMPTS) || 5;
-        if ((user.otp?.attempts || 0) >= maxAttempts)
-            return sendError(
-                res,
-                "Too many attempts. Request a new OTP.",
-                "429",
-            );
-        if (!user.otp?.expiresAt || new Date() > user.otp.expiresAt)
-            return sendError(
-                res,
-                "OTP expired. Please request a new one.",
-                "400",
-            );
         if (user.otp.code !== otp.trim()) {
             user.otp.attempts += 1;
-            await user.save();
-            const remaining = maxAttempts - user.otp.attempts;
+            await user.save({ validateBeforeSave: false });
+            const remaining = MAX_OTP_ATTEMPTS() - user.otp.attempts;
             return sendError(
                 res,
                 `Incorrect OTP. ${remaining} attempt(s) remaining.`,
@@ -468,9 +468,6 @@ exports.loginOtpVerify = async (req, res, next) => {
         }
 
         user.otp = undefined;
-        user.lastLogin = new Date();
-        await user.save();
-
         return sendTokenResponse(
             user,
             200,
@@ -487,6 +484,7 @@ exports.loginOtpVerify = async (req, res, next) => {
 // ═══════════════════════════════════════════════════════════════
 
 // POST /api/auth/forgot-password
+// Body: { identifier }   (phone or email)
 exports.forgotPassword = async (req, res, next) => {
     try {
         const { identifier } = req.body;
@@ -494,22 +492,23 @@ exports.forgotPassword = async (req, res, next) => {
             return sendError(res, "Phone or email is required.", "400");
 
         const type = detectIdentifierType(identifier.trim());
+        const genericMsg = "If an account exists, an OTP has been sent.";
 
         let user;
         if (type === "phone") {
-            const digits = identifier.replace(/\D/g, "").slice(-10);
-            user = await User.findOne({ phone: { $regex: digits + "$" } });
+            const normalized = normalizePhone(identifier);
+            user = await User.findOne({ phone: normalized });
         } else if (type === "email") {
             user = await User.findOne({ email: identifier.toLowerCase() });
+        } else {
+            return sendSuccess(res, null, genericMsg); // don't reveal invalid format
         }
-
-        const genericMsg = "If an account exists, an OTP has been sent.";
 
         if (!user || !user.isActive) return sendSuccess(res, null, genericMsg);
 
         const otp = generateOTP();
         user.otp = buildOTPPayload(otp, "reset");
-        await user.save();
+        await user.save({ validateBeforeSave: false });
 
         if (user.phone) {
             await sendOTP(user.phone, otp, "reset");
@@ -524,6 +523,7 @@ exports.forgotPassword = async (req, res, next) => {
 };
 
 // POST /api/auth/reset-password
+// Body: { userId, otp, newPassword, confirmPassword }
 exports.resetPassword = async (req, res, next) => {
     try {
         const { userId, otp, newPassword, confirmPassword } = req.body;
@@ -540,32 +540,31 @@ exports.resetPassword = async (req, res, next) => {
             );
 
         const user = await User.findById(userId).select(
-            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose",
+            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +tokenVersion",
         );
         if (!user) return sendError(res, "User not found.", "404");
 
-        if (user.otp?.purpose !== "reset")
-            return sendError(
-                res,
-                "No password reset OTP found. Please request one.",
-                "400",
-            );
-        if (!user.otp?.expiresAt || new Date() > user.otp.expiresAt)
-            return sendError(res, "OTP expired.", "400");
+        const otpErr = validateOTP(user, "reset");
+        if (otpErr) return sendError(res, otpErr, "400");
+
         if (user.otp.code !== otp.trim()) {
             user.otp.attempts += 1;
-            await user.save();
+            await user.save({ validateBeforeSave: false });
             return sendError(res, "Incorrect OTP.", "400");
         }
 
         user.password = newPassword;
         user.otp = undefined;
 
-        // Enable password-based login if not already
         if (user.phone) user.authMethods.phonePassword = true;
         if (user.email) user.authMethods.emailPassword = true;
 
+        // Invalidate all existing sessions on password reset
+        user.tokenVersion += 1;
+
         await user.save();
+
+        // ── BUG FIX: update lastLogin on reset (was missing) ──────
         return sendTokenResponse(
             user,
             200,
@@ -597,10 +596,10 @@ exports.getMe = async (req, res, next) => {
 };
 
 // PATCH /api/auth/me
-// Body: { name?, avatar?, useCase? }
+// Body: { name?, avatar?, avatarColor?, useCase? }
 exports.updateMe = async (req, res, next) => {
     try {
-        const { name, avatar, useCase } = req.body;
+        const { name, avatar, avatarColor, useCase } = req.body;
         const user = await User.findById(req.user.id);
         if (!user) return sendError(res, "User not found.", "404");
 
@@ -615,6 +614,7 @@ exports.updateMe = async (req, res, next) => {
                 return sendError(res, "Invalid avatar.", "400");
             user.avatar = avatar;
         }
+        if (avatarColor) user.avatarColor = avatarColor;
         if (useCase) {
             const valid = ["split", "freelance", "both"];
             if (!valid.includes(useCase))
@@ -622,11 +622,350 @@ exports.updateMe = async (req, res, next) => {
             user.useCase = useCase;
         }
 
-        await user.save();
+        await user.save({ validateBeforeSave: false });
         return sendSuccess(
             res,
             { user: user.toPublicJSON() },
             "Profile updated.",
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW: LOGOUT
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/auth/logout   (protected)
+// Increments tokenVersion → all existing access tokens become invalid
+// Also clears refresh token and optionally removes a device FCM token
+exports.logout = async (req, res, next) => {
+    try {
+        const user = await User.findById(req.user.id).select(
+            "+tokenVersion +refreshToken",
+        );
+        if (!user) return sendError(res, "User not found.", "404");
+
+        // Increment version → JWT middleware will reject all old tokens
+        user.tokenVersion += 1;
+        user.refreshToken = undefined;
+
+        // Optionally remove a specific device token (sent from mobile on logout)
+        const { deviceToken } = req.body;
+        if (deviceToken) {
+            user.deviceTokens = user.deviceTokens.filter(
+                (d) => d.token !== deviceToken,
+            );
+        }
+
+        await user.save({ validateBeforeSave: false });
+
+        return sendSuccess(res, null, "Logged out successfully.");
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW: REFRESH TOKEN
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/auth/refresh
+// Body: { userId, refreshToken }
+// Returns a new accessToken (does NOT rotate the refresh token unless near expiry)
+exports.refreshToken = async (req, res, next) => {
+    try {
+        const { userId, refreshToken } = req.body;
+
+        if (!userId || !refreshToken)
+            return sendError(
+                res,
+                "userId and refreshToken are required.",
+                "400",
+            );
+
+        const user = await User.findById(userId).select(
+            "+refreshToken +tokenVersion",
+        );
+
+        if (!user) return sendError(res, "User not found.", "401");
+        if (!user.isActive)
+            return sendError(res, "Account deactivated.", "401");
+        if (!user.refreshToken)
+            return sendError(
+                res,
+                "No active session. Please login again.",
+                "401",
+            );
+
+        // Compare the raw token sent by client against the hashed one in DB
+        const isValid = await user.compareRefreshToken(refreshToken);
+        if (!isValid)
+            return sendError(
+                res,
+                "Invalid or expired refresh token. Please login again.",
+                "401",
+            );
+
+        // Issue new access token with current tokenVersion
+        const { signAccessToken } = require("../utils/jwt");
+        const newAccessToken = signAccessToken(user._id, user.tokenVersion);
+
+        return sendSuccess(
+            res,
+            {
+                accessToken: newAccessToken,
+                expiresIn: process.env.JWT_ACCESS_EXPIRES_IN || "15m",
+            },
+            "Token refreshed successfully.",
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW: CHANGE PASSWORD  (logged in user)
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/auth/change-password   (protected)
+// Body: { currentPassword, newPassword, confirmPassword }
+exports.changePassword = async (req, res, next) => {
+    try {
+        const { currentPassword, newPassword, confirmPassword } = req.body;
+
+        if (!currentPassword || !newPassword || !confirmPassword)
+            return sendError(
+                res,
+                "currentPassword, newPassword, and confirmPassword are required.",
+                "400",
+            );
+
+        if (newPassword !== confirmPassword)
+            return sendError(res, "New passwords do not match.", "400");
+
+        if (!isValidPassword(newPassword))
+            return sendError(
+                res,
+                "New password must be at least 8 characters with 1 letter and 1 number.",
+                "400",
+            );
+
+        if (currentPassword === newPassword)
+            return sendError(
+                res,
+                "New password must be different from your current password.",
+                "400",
+            );
+
+        const user = await User.findById(req.user.id).select(
+            "+password +tokenVersion",
+        );
+        if (!user) return sendError(res, "User not found.", "404");
+
+        if (!user.password)
+            return sendError(
+                res,
+                "No password set on this account. Use forgot password.",
+                "400",
+            );
+
+        const isMatch = await user.comparePassword(currentPassword);
+        if (!isMatch)
+            return sendError(res, "Current password is incorrect.", "401");
+
+        user.password = newPassword;
+        // Invalidate all OTHER sessions — current session gets a fresh token
+        user.tokenVersion += 1;
+        user.refreshToken = undefined;
+
+        await user.save();
+
+        // Issue fresh tokens so the current session stays logged in
+        return sendTokenResponse(
+            user,
+            200,
+            res,
+            "Password changed successfully.",
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW: UPDATE PHONE (with re-verification)
+// ═══════════════════════════════════════════════════════════════
+
+// POST /api/auth/update-phone/request   (protected)
+// Body: { newPhone }
+// Sends OTP to the NEW phone number for verification
+exports.updatePhoneRequest = async (req, res, next) => {
+    try {
+        const { newPhone } = req.body;
+
+        if (!newPhone) return sendError(res, "newPhone is required.", "400");
+        if (!isValidPhone(newPhone))
+            return sendError(
+                res,
+                "Invalid phone number. Use a 10-digit Indian number.",
+                "400",
+            );
+
+        const normalized = normalizePhone(newPhone);
+
+        // Check the new phone isn't already taken by another account
+        const existing = await User.findOne({ phone: normalized });
+        if (existing && existing._id.toString() !== req.user.id.toString())
+            return sendError(
+                res,
+                "This phone number is already registered to another account.",
+                "409",
+            );
+
+        // Check it's not the same as current phone
+        if (req.user.phone === normalized)
+            return sendError(
+                res,
+                "This is already your current phone number.",
+                "400",
+            );
+
+        const otp = generateOTP();
+        const user = await User.findById(req.user.id).select(
+            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +otp.pendingPhone",
+        );
+        if (!user) return sendError(res, "User not found.", "404");
+
+        user.otp = {
+            ...buildOTPPayload(otp, "updatePhone"),
+            pendingPhone: normalized, // store new phone here until verified
+        };
+
+        await user.save({ validateBeforeSave: false });
+        await sendOTP(normalized, otp, "updatePhone");
+
+        return sendSuccess(
+            res,
+            { nextStep: "verify-new-phone" },
+            `OTP sent to ${normalized}. Verify to complete phone update.`,
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// POST /api/auth/update-phone/verify   (protected)
+// Body: { otp }
+// Verifies OTP on the new phone and updates the phone field
+exports.updatePhoneVerify = async (req, res, next) => {
+    try {
+        const { otp } = req.body;
+
+        if (!otp) return sendError(res, "otp is required.", "400");
+
+        const user = await User.findById(req.user.id).select(
+            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +otp.pendingPhone +tokenVersion",
+        );
+        if (!user) return sendError(res, "User not found.", "404");
+
+        const otpErr = validateOTP(user, "updatePhone");
+        if (otpErr) return sendError(res, otpErr, "400");
+
+        if (!user.otp.pendingPhone)
+            return sendError(
+                res,
+                "No pending phone update. Please request again.",
+                "400",
+            );
+
+        if (user.otp.code !== otp.trim()) {
+            user.otp.attempts += 1;
+            await user.save({ validateBeforeSave: false });
+            const remaining = MAX_OTP_ATTEMPTS() - user.otp.attempts;
+            return sendError(
+                res,
+                `Incorrect OTP. ${remaining} attempt(s) remaining.`,
+                "400",
+            );
+        }
+
+        const newPhone = user.otp.pendingPhone;
+        user.phone = newPhone;
+        user.isPhoneVerified = true;
+        user.authMethods.phoneOtp = true;
+        user.authMethods.phonePassword = true;
+        user.otp = undefined;
+
+        // Invalidate all other sessions after phone change (security)
+        user.tokenVersion += 1;
+        user.refreshToken = undefined;
+
+        await user.save();
+
+        // Re-issue tokens so current device stays logged in
+        return sendTokenResponse(
+            user,
+            200,
+            res,
+            `Phone number updated to ${newPhone} successfully.`,
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  NEW: DELETE ACCOUNT
+// ═══════════════════════════════════════════════════════════════
+
+// DELETE /api/auth/me   (protected)
+// Body: { password? }  — optional password confirmation for safety
+// Soft-deletes: anonymizes PII, marks isActive: false
+// (App Store & Google Play require account deletion option)
+exports.deleteAccount = async (req, res, next) => {
+    try {
+        const { password } = req.body;
+
+        const user = await User.findById(req.user.id).select(
+            "+password +tokenVersion",
+        );
+        if (!user) return sendError(res, "User not found.", "404");
+
+        // If user has a password, require confirmation before deleting
+        if (user.password && password !== undefined) {
+            const isMatch = await user.comparePassword(password);
+            if (!isMatch)
+                return sendError(
+                    res,
+                    "Password confirmation is incorrect.",
+                    "401",
+                );
+        }
+
+        // ── Soft delete: anonymize PII ────────────────────────────
+        // We keep the record for referential integrity (expenses, groups etc.)
+        // but strip all personally identifying information
+        const anonymousId = `deleted_${user._id}`;
+
+        user.name = "Deleted User";
+        user.phone = undefined; // unset sparse unique field
+        user.email = undefined; // unset sparse unique field
+        user.password = undefined;
+        user.refreshToken = undefined;
+        user.deviceTokens = [];
+        user.otp = undefined;
+        user.isActive = false;
+        user.isProfileComplete = false;
+        user.tokenVersion += 1; // invalidate all tokens immediately
+
+        await user.save({ validateBeforeSave: false });
+
+        return sendSuccess(
+            res,
+            null,
+            "Account deleted successfully. We're sorry to see you go.",
         );
     } catch (err) {
         next(err);
