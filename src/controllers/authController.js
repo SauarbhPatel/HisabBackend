@@ -1,6 +1,7 @@
 const User = require("../models/User");
+const crypto = require("crypto");
 const { generateOTP, sendOTP, buildOTPPayload } = require("../utils/otp");
-const { sendTokenResponse } = require("../utils/jwt");
+const { sendTokenResponse, verifyAccessToken } = require("../utils/jwt");
 const { sendSuccess, sendError } = require("../utils/response");
 const {
     isValidPhone,
@@ -25,6 +26,47 @@ function validateOTP(user, purpose) {
         return "Too many incorrect attempts. Please request a new OTP.";
     if (!user.otp.expiresAt || new Date() > user.otp.expiresAt)
         return "OTP has expired. Please request a new one.";
+    return null;
+}
+
+// ─── Detect which signup step a user is stuck on ─────────────
+// Returns an object if signup is incomplete, null if fully done.
+// Used in both login paths to block login and redirect to the right step.
+//
+// Step logic:
+//   1. Phone not verified yet            → verify-otp      (resend OTP)
+//   2. Phone verified but no password    → set-password
+//   3. Password set but profile not done → complete-profile
+//   4. isProfileComplete true            → fully registered, allow login
+function getIncompleteSignupStep(user) {
+    // Step 1: phone exists but OTP not verified yet
+    if (user.phone && !user.isPhoneVerified) {
+        return {
+            incompleteSignup: true,
+            userId: user._id,
+            nextStep: "verify-otp",
+            message: "Please verify your phone number to complete signup.",
+        };
+    }
+    // Step 2: phone verified (or email-only) but password never set
+    if (!user.password) {
+        return {
+            incompleteSignup: true,
+            userId: user._id,
+            nextStep: "set-password",
+            message: "Please set your password to complete signup.",
+        };
+    }
+    // Step 3: password set but profile (avatar + useCase) not completed
+    if (!user.isProfileComplete) {
+        return {
+            incompleteSignup: true,
+            userId: user._id,
+            nextStep: "complete-profile",
+            message: "Please complete your profile to finish signup.",
+        };
+    }
+    // Fully registered
     return null;
 }
 
@@ -362,6 +404,20 @@ exports.loginWithPassword = async (req, res, next) => {
                 "401",
             );
 
+        // ── Incomplete signup guard ────────────────────────────────
+        // If the user started signup but never finished, block login
+        // and tell the mobile app exactly which step to resume.
+        // We check this BEFORE the password comparison so the user
+        // cannot get in even if they somehow have a partial password.
+        const incompleteStep = getIncompleteSignupStep(user);
+        if (incompleteStep)
+            return sendError(
+                res,
+                incompleteStep.message,
+                "403",
+                incompleteStep,
+            );
+
         const canLogin =
             type === "phone"
                 ? user.authMethods.phonePassword
@@ -373,13 +429,6 @@ exports.loginWithPassword = async (req, res, next) => {
                 type === "phone"
                     ? "This account uses OTP login. Please use Phone + OTP login instead."
                     : "No password set for this email. Please use another login method.",
-                "401",
-            );
-
-        if (type === "phone" && !user.isPhoneVerified)
-            return sendError(
-                res,
-                "Phone not verified. Please complete signup first.",
                 "401",
             );
 
@@ -449,7 +498,7 @@ exports.loginOtpVerify = async (req, res, next) => {
             return sendError(res, "userId and otp are required.", "400");
 
         const user = await User.findById(userId).select(
-            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +tokenVersion",
+            "+otp.code +otp.expiresAt +otp.attempts +otp.purpose +tokenVersion +password",
         );
         if (!user) return sendError(res, "User not found.", "404");
 
@@ -467,7 +516,23 @@ exports.loginOtpVerify = async (req, res, next) => {
             );
         }
 
+        // OTP is correct — now check if signup was ever completed.
+        // Clear the OTP first so it can't be reused regardless of outcome.
         user.otp = undefined;
+        await user.save({ validateBeforeSave: false });
+
+        // ── Incomplete signup guard ────────────────────────────────
+        // OTP proves they own the phone, but if they never finished
+        // signup we send them back to the right step instead of issuing tokens.
+        const incompleteStep = getIncompleteSignupStep(user);
+        if (incompleteStep)
+            return sendError(
+                res,
+                incompleteStep.message,
+                "403",
+                incompleteStep,
+            );
+
         return sendTokenResponse(
             user,
             200,
