@@ -2,6 +2,7 @@ const Project = require("../models/Project");
 const Developer = require("../models/Developer");
 const { sendSuccess, sendError } = require("../utils/response");
 const { updateDevStats } = require("./developerController");
+const { updateClientStats } = require("./clientController"); // ← PATCH 3 import
 
 // ═══════════════════════════════════════════════════════════════
 //  PROJECTS
@@ -147,6 +148,15 @@ exports.createProject = async (req, res, next) => {
             );
         }
 
+        // ── PATCH 3 · createProject ──────────────────────────────
+        // Sync the Client document's cached totals after a new project is created.
+        if (project.client) {
+            try {
+                await updateClientStats(project.client, req.user.id);
+            } catch (_) {}
+        }
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(res, { project }, "Project created successfully.");
     } catch (err) {
         next(err);
@@ -189,6 +199,16 @@ exports.updateProject = async (req, res, next) => {
             { new: true, runValidators: true },
         );
         if (!project) return sendError(res, "Project not found.", "404");
+
+        // ── PATCH 3 · updateProject ──────────────────────────────
+        // Re-sync client stats whenever project financials or client name changes.
+        if (updates.client || updates.totalPrice || updates.status) {
+            try {
+                await updateClientStats(project.client, req.user.id);
+            } catch (_) {}
+        }
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(res, { project }, "Project updated successfully.");
     } catch (err) {
         next(err);
@@ -204,6 +224,16 @@ exports.deleteProject = async (req, res, next) => {
             { new: true },
         );
         if (!project) return sendError(res, "Project not found.", "404");
+
+        // ── PATCH 3 · deleteProject ──────────────────────────────
+        // Archiving a project reduces the client's active project count.
+        if (project.client) {
+            try {
+                await updateClientStats(project.client, req.user.id);
+            } catch (_) {}
+        }
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(res, null, "Project archived successfully.");
     } catch (err) {
         next(err);
@@ -247,6 +277,13 @@ exports.addClientPayment = async (req, res, next) => {
 
         await project.save();
 
+        // ── PATCH 3 · addClientPayment ───────────────────────────
+        // A new payment changes the client's receivedAmount total.
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(
             res,
             {
@@ -288,6 +325,14 @@ exports.updateClientPayment = async (req, res, next) => {
         if (req.body.amount) payment.amount = Number(req.body.amount);
 
         await project.save();
+
+        // ── PATCH 3 · updateClientPayment ────────────────────────
+        // Editing a payment (e.g. marking paid→pending) changes receivedAmount.
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(
             res,
             { payment },
@@ -309,6 +354,14 @@ exports.deleteClientPayment = async (req, res, next) => {
 
         project.clientPayments.pull({ _id: req.params.paymentId });
         await project.save();
+
+        // ── PATCH 3 · deleteClientPayment ────────────────────────
+        // Removing a payment reduces the client's receivedAmount total.
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
+        // ────────────────────────────────────────────────────────
+
         return sendSuccess(res, null, "Client payment deleted successfully.");
     } catch (err) {
         next(err);
@@ -397,10 +450,6 @@ exports.updateDevStatus = async (req, res, next) => {
 };
 
 // POST /api/projects/:id/developers/:devId/pay
-
-// ─── PATCH: Replace the existing payDeveloper export in projectController.js ──
-// The only change is replacing the manual $inc with a proper recalculation call.
-
 exports.payDeveloper = async (req, res, next) => {
     try {
         const { amount, date, method, note } = req.body;
@@ -434,7 +483,7 @@ exports.payDeveloper = async (req, res, next) => {
 
         await project.save(); // pre-save hook updates slot.paidAmount
 
-        // ── Sync Developer document stats from live data ───────────
+        // Sync Developer document stats from live data
         await updateDevStats(slot.developer, req.user.id);
 
         const remaining = slot.agreedAmount - slot.paidAmount;
@@ -452,6 +501,7 @@ exports.payDeveloper = async (req, res, next) => {
         next(err);
     }
 };
+
 // ═══════════════════════════════════════════════════════════════
 //  REPORT SUMMARY
 // ═══════════════════════════════════════════════════════════════

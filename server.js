@@ -70,6 +70,7 @@ const authLimiter = rateLimit({
 app.use("/api/auth", authLimiter, require("./src/routes/authRoutes"));
 app.use("/api/projects", require("./src/routes/projectRoutes"));
 app.use("/api/developers", require("./src/routes/developerRoutes"));
+app.use("/api/clients", require("./src/routes/clientRoutes"));
 app.use("/api/expenses", require("./src/routes/expenseRoutes"));
 app.use("/api/friends", require("./src/routes/friendRoutes"));
 app.use("/api/groups", require("./src/routes/groupRoutes"));
