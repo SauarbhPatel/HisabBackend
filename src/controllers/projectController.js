@@ -2,13 +2,13 @@ const Project = require("../models/Project");
 const Developer = require("../models/Developer");
 const { sendSuccess, sendError } = require("../utils/response");
 const { updateDevStats } = require("./developerController");
-const { updateClientStats } = require("./clientController"); // ← PATCH 3 import
+const { updateClientStats } = require("./clientController");
 
 // ═══════════════════════════════════════════════════════════════
-//  PROJECTS
+//  PROJECTS — CRUD
 // ═══════════════════════════════════════════════════════════════
 
-// GET /api/projects
+// GET /api/projects?year=2026&status=inprogress&client=Maksoft&search=ERP
 exports.getProjects = async (req, res, next) => {
     try {
         const { year, status, client, search } = req.query;
@@ -27,13 +27,15 @@ exports.getProjects = async (req, res, next) => {
                 { name: { $regex: search, $options: "i" } },
                 { client: { $regex: search, $options: "i" } },
                 { type: { $regex: search, $options: "i" } },
+                { tags: { $regex: search, $options: "i" } },
             ];
         }
 
         const projects = await Project.find(filter)
-            .populate("developers.developer", "name phone role")
+            .populate("developers.developer", "name phone role upiId")
             .sort({ startDate: -1 });
 
+        // Group by month for the month-group-label sections in the UI
         const grouped = {};
         projects.forEach((p) => {
             const d = p.startDate;
@@ -47,6 +49,7 @@ exports.getProjects = async (req, res, next) => {
             0,
         );
         const totalPending = projects.reduce((s, p) => s + p.pendingAmount, 0);
+        const totalDevPaid = projects.reduce((s, p) => s + p.totalDevPaid, 0);
         const activeCount = projects.filter(
             (p) => p.status === "inprogress",
         ).length;
@@ -55,11 +58,73 @@ exports.getProjects = async (req, res, next) => {
             res,
             {
                 count: projects.length,
-                stats: { totalReceived, totalPending, activeCount },
+                stats: {
+                    totalReceived: +totalReceived.toFixed(2),
+                    totalPending: +totalPending.toFixed(2),
+                    totalDevPaid: +totalDevPaid.toFixed(2),
+                    netProfit: +(totalReceived - totalDevPaid).toFixed(2),
+                    activeCount,
+                },
                 grouped,
                 projects,
             },
             "Projects fetched successfully.",
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// GET /api/projects/summary?year=2026
+// Registered BEFORE /:id to avoid route conflict — see projectRoutes.js
+exports.getProjectSummary = async (req, res, next) => {
+    try {
+        const year = req.query.year || new Date().getFullYear();
+
+        const projects = await Project.find({
+            owner: req.user.id,
+            isArchived: false,
+            startDate: {
+                $gte: new Date(`${year}-01-01`),
+                $lte: new Date(`${year}-12-31`),
+            },
+        });
+
+        const totalBilled = projects.reduce((s, p) => s + p.totalPrice, 0);
+        const totalReceived = projects.reduce(
+            (s, p) => s + p.receivedAmount,
+            0,
+        );
+        const totalPending = projects.reduce((s, p) => s + p.pendingAmount, 0);
+        const totalDevPaid = projects.reduce((s, p) => s + p.totalDevPaid, 0);
+
+        const byStatus = projects.reduce((acc, p) => {
+            acc[p.status] = (acc[p.status] || 0) + 1;
+            return acc;
+        }, {});
+
+        const byClient = {};
+        projects.forEach((p) => {
+            if (!byClient[p.client]) byClient[p.client] = 0;
+            byClient[p.client] += p.receivedAmount;
+        });
+
+        return sendSuccess(
+            res,
+            {
+                year: Number(year),
+                summary: {
+                    totalBilled: +totalBilled.toFixed(2),
+                    totalReceived: +totalReceived.toFixed(2),
+                    totalPending: +totalPending.toFixed(2),
+                    totalDevPaid: +totalDevPaid.toFixed(2),
+                    netProfit: +(totalReceived - totalDevPaid).toFixed(2),
+                    projectCount: projects.length,
+                    byStatus,
+                    byClient,
+                },
+            },
+            "Project summary fetched successfully.",
         );
     } catch (err) {
         next(err);
@@ -91,6 +156,8 @@ exports.createProject = async (req, res, next) => {
             startDate,
             endDate,
             totalPrice,
+            notes,
+            tags,
             developers,
         } = req.body;
 
@@ -104,6 +171,23 @@ exports.createProject = async (req, res, next) => {
             return sendError(
                 res,
                 "totalPrice must be a positive number.",
+                "400",
+            );
+
+        const validTypes = [
+            "Development",
+            "UI/UX Design",
+            "Deployment",
+            "Maintenance",
+            "Mobile App",
+            "Web App",
+            "API Integration",
+            "Other",
+        ];
+        if (type && !validTypes.includes(type))
+            return sendError(
+                res,
+                `Invalid type. Valid: ${validTypes.join(", ")}`,
                 "400",
             );
 
@@ -138,6 +222,8 @@ exports.createProject = async (req, res, next) => {
             startDate: new Date(startDate),
             endDate: endDate ? new Date(endDate) : undefined,
             totalPrice: Number(totalPrice),
+            notes: notes || undefined,
+            tags: tags || [],
             developers: devSlots,
         });
 
@@ -148,14 +234,9 @@ exports.createProject = async (req, res, next) => {
             );
         }
 
-        // ── PATCH 3 · createProject ──────────────────────────────
-        // Sync the Client document's cached totals after a new project is created.
-        if (project.client) {
-            try {
-                await updateClientStats(project.client, req.user.id);
-            } catch (_) {}
-        }
-        // ────────────────────────────────────────────────────────
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
 
         return sendSuccess(res, { project }, "Project created successfully.");
     } catch (err) {
@@ -173,25 +254,46 @@ exports.updateProject = async (req, res, next) => {
             "startDate",
             "endDate",
             "totalPrice",
-            "status",
+            "notes",
             "tags",
+            "invoiceUrl",
+            "invoiceNumber",
         ];
         const updates = {};
         allowed.forEach((k) => {
             if (req.body[k] !== undefined) updates[k] = req.body[k];
         });
 
-        if (updates.status) {
-            const valid = [
-                "inactive",
-                "inprogress",
-                "onstay",
-                "completed",
-                "cancelled",
-            ];
-            if (!valid.includes(updates.status))
-                return sendError(res, "Invalid status.", "400");
-        }
+        if (!Object.keys(updates).length)
+            return sendError(res, "No valid fields provided to update.", "400");
+
+        const validTypes = [
+            "Development",
+            "UI/UX Design",
+            "Deployment",
+            "Maintenance",
+            "Mobile App",
+            "Web App",
+            "API Integration",
+            "Other",
+        ];
+        if (updates.type && !validTypes.includes(updates.type))
+            return sendError(
+                res,
+                `Invalid type. Valid: ${validTypes.join(", ")}`,
+                "400",
+            );
+
+        if (
+            updates.totalPrice &&
+            (isNaN(Number(updates.totalPrice)) ||
+                Number(updates.totalPrice) <= 0)
+        )
+            return sendError(
+                res,
+                "totalPrice must be a positive number.",
+                "400",
+            );
 
         const project = await Project.findOneAndUpdate(
             { _id: req.params.id, owner: req.user.id },
@@ -200,14 +302,11 @@ exports.updateProject = async (req, res, next) => {
         );
         if (!project) return sendError(res, "Project not found.", "404");
 
-        // ── PATCH 3 · updateProject ──────────────────────────────
-        // Re-sync client stats whenever project financials or client name changes.
-        if (updates.client || updates.totalPrice || updates.status) {
+        if (updates.client || updates.totalPrice) {
             try {
                 await updateClientStats(project.client, req.user.id);
             } catch (_) {}
         }
-        // ────────────────────────────────────────────────────────
 
         return sendSuccess(res, { project }, "Project updated successfully.");
     } catch (err) {
@@ -215,7 +314,48 @@ exports.updateProject = async (req, res, next) => {
     }
 };
 
-// DELETE /api/projects/:id
+// PATCH /api/projects/:id/status
+// Dedicated endpoint powering the Status Overlay
+// (inactive | inprogress | onstay | completed | cancelled)
+exports.updateProjectStatus = async (req, res, next) => {
+    try {
+        const { status } = req.body;
+        const valid = [
+            "inactive",
+            "inprogress",
+            "onstay",
+            "completed",
+            "cancelled",
+        ];
+        if (!status || !valid.includes(status))
+            return sendError(
+                res,
+                `status must be one of: ${valid.join(", ")}`,
+                "400",
+            );
+
+        const project = await Project.findOneAndUpdate(
+            { _id: req.params.id, owner: req.user.id },
+            { $set: { status } },
+            { new: true },
+        );
+        if (!project) return sendError(res, "Project not found.", "404");
+
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
+
+        return sendSuccess(
+            res,
+            { project },
+            `Project status updated to '${status}'.`,
+        );
+    } catch (err) {
+        next(err);
+    }
+};
+
+// DELETE /api/projects/:id  (soft delete — archive)
 exports.deleteProject = async (req, res, next) => {
     try {
         const project = await Project.findOneAndUpdate(
@@ -225,14 +365,9 @@ exports.deleteProject = async (req, res, next) => {
         );
         if (!project) return sendError(res, "Project not found.", "404");
 
-        // ── PATCH 3 · deleteProject ──────────────────────────────
-        // Archiving a project reduces the client's active project count.
-        if (project.client) {
-            try {
-                await updateClientStats(project.client, req.user.id);
-            } catch (_) {}
-        }
-        // ────────────────────────────────────────────────────────
+        try {
+            await updateClientStats(project.client, req.user.id);
+        } catch (_) {}
 
         return sendSuccess(res, null, "Project archived successfully.");
     } catch (err) {
@@ -259,6 +394,21 @@ exports.addClientPayment = async (req, res, next) => {
         if (isNaN(Number(amount)) || Number(amount) <= 0)
             return sendError(res, "amount must be positive.", "400");
 
+        const validMethods = ["upi", "cash", "bank", "cheque", "other"];
+        const validStatuses = ["paid", "pending", "due"];
+        if (method && !validMethods.includes(method))
+            return sendError(
+                res,
+                `Invalid method. Valid: ${validMethods.join(", ")}`,
+                "400",
+            );
+        if (status && !validStatuses.includes(status))
+            return sendError(
+                res,
+                `Invalid status. Valid: ${validStatuses.join(", ")}`,
+                "400",
+            );
+
         const project = await Project.findOne({
             _id: req.params.id,
             owner: req.user.id,
@@ -275,20 +425,18 @@ exports.addClientPayment = async (req, res, next) => {
             status: status || "paid",
         });
 
-        await project.save();
+        await project.save(); // pre-save hook recalcs receivedAmount
 
-        // ── PATCH 3 · addClientPayment ───────────────────────────
-        // A new payment changes the client's receivedAmount total.
         try {
             await updateClientStats(project.client, req.user.id);
         } catch (_) {}
-        // ────────────────────────────────────────────────────────
 
         return sendSuccess(
             res,
             {
                 receivedAmount: project.receivedAmount,
                 pendingAmount: project.pendingAmount,
+                paymentPercent: project.paymentPercent,
                 clientPayments: project.clientPayments,
             },
             "Client payment recorded successfully.",
@@ -323,19 +471,22 @@ exports.updateClientPayment = async (req, res, next) => {
             if (req.body[f] !== undefined) payment[f] = req.body[f];
         });
         if (req.body.amount) payment.amount = Number(req.body.amount);
+        if (req.body.date) payment.date = new Date(req.body.date);
 
-        await project.save();
+        await project.save(); // pre-save hook re-syncs receivedAmount
 
-        // ── PATCH 3 · updateClientPayment ────────────────────────
-        // Editing a payment (e.g. marking paid→pending) changes receivedAmount.
         try {
             await updateClientStats(project.client, req.user.id);
         } catch (_) {}
-        // ────────────────────────────────────────────────────────
 
         return sendSuccess(
             res,
-            { payment },
+            {
+                payment,
+                receivedAmount: project.receivedAmount,
+                pendingAmount: project.pendingAmount,
+                paymentPercent: project.paymentPercent,
+            },
             "Client payment updated successfully.",
         );
     } catch (err) {
@@ -355,14 +506,18 @@ exports.deleteClientPayment = async (req, res, next) => {
         project.clientPayments.pull({ _id: req.params.paymentId });
         await project.save();
 
-        // ── PATCH 3 · deleteClientPayment ────────────────────────
-        // Removing a payment reduces the client's receivedAmount total.
         try {
             await updateClientStats(project.client, req.user.id);
         } catch (_) {}
-        // ────────────────────────────────────────────────────────
 
-        return sendSuccess(res, null, "Client payment deleted successfully.");
+        return sendSuccess(
+            res,
+            {
+                receivedAmount: project.receivedAmount,
+                pendingAmount: project.pendingAmount,
+            },
+            "Client payment deleted successfully.",
+        );
     } catch (err) {
         next(err);
     }
@@ -380,6 +535,12 @@ exports.addDevToProject = async (req, res, next) => {
             return sendError(
                 res,
                 "developer and agreedAmount are required.",
+                "400",
+            );
+        if (isNaN(Number(agreedAmount)) || Number(agreedAmount) <= 0)
+            return sendError(
+                res,
+                "agreedAmount must be a positive number.",
                 "400",
             );
 
@@ -405,7 +566,9 @@ exports.addDevToProject = async (req, res, next) => {
             developer: dev._id,
             role: role || dev.role,
             agreedAmount: Number(agreedAmount),
+            status: "active",
         });
+
         await project.save();
         await Developer.findByIdAndUpdate(dev._id, {
             $inc: { projectCount: 1 },
@@ -422,13 +585,14 @@ exports.addDevToProject = async (req, res, next) => {
 };
 
 // PATCH /api/projects/:id/developers/:devId/status
+// Powers ⏸ Pause / ▶ Resume / 🗑 Remove dev buttons
 exports.updateDevStatus = async (req, res, next) => {
     try {
         const { status } = req.body;
         if (!["active", "paused", "removed"].includes(status))
             return sendError(
                 res,
-                "status must be active, paused, or removed.",
+                "status must be 'active', 'paused', or 'removed'.",
                 "400",
             );
 
@@ -443,6 +607,11 @@ exports.updateDevStatus = async (req, res, next) => {
 
         slot.status = status;
         await project.save();
+
+        try {
+            await updateDevStats(slot.developer, req.user.id);
+        } catch (_) {}
+
         return sendSuccess(res, { slot }, `Developer ${status} successfully.`);
     } catch (err) {
         next(err);
@@ -450,11 +619,20 @@ exports.updateDevStatus = async (req, res, next) => {
 };
 
 // POST /api/projects/:id/developers/:devId/pay
+// Powers the 💸 Pay button on dev payment cards
 exports.payDeveloper = async (req, res, next) => {
     try {
         const { amount, date, method, note } = req.body;
         if (!amount || isNaN(Number(amount)) || Number(amount) <= 0)
             return sendError(res, "Valid amount is required.", "400");
+
+        const validMethods = ["upi", "cash", "bank", "other"];
+        if (method && !validMethods.includes(method))
+            return sendError(
+                res,
+                `Invalid method. Valid: ${validMethods.join(", ")}`,
+                "400",
+            );
 
         const project = await Project.findOne({
             _id: req.params.id,
@@ -464,6 +642,9 @@ exports.payDeveloper = async (req, res, next) => {
 
         const slot = project.developers.id(req.params.devId);
         if (!slot) return sendError(res, "Developer slot not found.", "404");
+
+        if (slot.status === "removed")
+            return sendError(res, "Cannot pay a removed developer.", "400");
 
         const newPaid = (slot.paidAmount || 0) + Number(amount);
         if (newPaid > slot.agreedAmount)
@@ -483,16 +664,14 @@ exports.payDeveloper = async (req, res, next) => {
 
         await project.save(); // pre-save hook updates slot.paidAmount
 
-        // Sync Developer document stats from live data
         await updateDevStats(slot.developer, req.user.id);
-
-        const remaining = slot.agreedAmount - slot.paidAmount;
 
         return sendSuccess(
             res,
             {
                 paidAmount: slot.paidAmount,
-                remaining,
+                remaining: slot.agreedAmount - slot.paidAmount,
+                agreedAmount: slot.agreedAmount,
                 payments: slot.payments,
             },
             "Developer payment recorded successfully.",
@@ -502,65 +681,45 @@ exports.payDeveloper = async (req, res, next) => {
     }
 };
 
-// ═══════════════════════════════════════════════════════════════
-//  REPORT SUMMARY
-// ═══════════════════════════════════════════════════════════════
-
-// GET /api/projects/summary?year=2026
-exports.getProjectSummary = async (req, res, next) => {
+// GET /api/projects/:id/developers/:devId/payment-history
+// Powers the 🔗 Details button → Developer Payment Page overlay inside a project
+exports.getDevPaymentHistory = async (req, res, next) => {
     try {
-        const year = req.query.year || new Date().getFullYear();
-
-        const projects = await Project.find({
+        const project = await Project.findOne({
+            _id: req.params.id,
             owner: req.user.id,
-            isArchived: false,
-            startDate: {
-                $gte: new Date(`${year}-01-01`),
-                $lte: new Date(`${year}-12-31`),
-            },
-        });
+        }).populate("developers.developer", "name phone role upiId");
+        if (!project) return sendError(res, "Project not found.", "404");
 
-        const totalReceived = projects.reduce(
-            (s, p) => s + p.receivedAmount,
-            0,
-        );
-        const totalPending = projects.reduce((s, p) => s + p.pendingAmount, 0);
-        const totalBilled = projects.reduce((s, p) => s + p.totalPrice, 0);
-
-        let totalDevPaid = 0;
-        projects.forEach((p) => {
-            p.developers.forEach((d) => {
-                totalDevPaid += d.paidAmount || 0;
-            });
-        });
-
-        const byStatus = projects.reduce((acc, p) => {
-            acc[p.status] = (acc[p.status] || 0) + 1;
-            return acc;
-        }, {});
-
-        const byClient = {};
-        projects.forEach((p) => {
-            if (!byClient[p.client]) byClient[p.client] = 0;
-            byClient[p.client] += p.receivedAmount;
-        });
+        const slot = project.developers.id(req.params.devId);
+        if (!slot) return sendError(res, "Developer slot not found.", "404");
 
         return sendSuccess(
             res,
             {
-                year: Number(year),
-                summary: {
-                    totalBilled,
-                    totalReceived,
-                    totalPending,
-                    totalDevPaid,
-                    netProfit: totalReceived - totalDevPaid,
-                    projectCount: projects.length,
-                    byStatus,
-                    byClient,
+                project: {
+                    id: project._id,
+                    name: project.name,
+                    client: project.client,
                 },
+                developer: slot.developer, // populated
+                slot: {
+                    role: slot.role,
+                    agreedAmount: slot.agreedAmount,
+                    paidAmount: slot.paidAmount,
+                    remaining: Math.max(0, slot.agreedAmount - slot.paidAmount),
+                    payPercent: slot.agreedAmount
+                        ? Math.round(
+                              (slot.paidAmount / slot.agreedAmount) * 100,
+                          )
+                        : 0,
+                    status: slot.status,
+                },
+                payments: slot.payments.sort(
+                    (a, b) => new Date(b.date) - new Date(a.date),
+                ),
             },
-            "Project summary fetched successfully.",
+            "Developer payment history fetched successfully.",
         );
     } catch (err) {
         next(err);
