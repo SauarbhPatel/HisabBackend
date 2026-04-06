@@ -61,8 +61,30 @@ const friendSchema = new mongoose.Schema(
 );
 
 // ─── Prevent duplicate friend pairs ──────────────────────────
-friendSchema.index({ owner: 1, friend: 1 }, { unique: true, sparse: true });
-friendSchema.index({ owner: 1, friendPhone: 1 }, { sparse: true });
+// friendSchema.index({ owner: 1, friend: 1 }, { unique: true, sparse: true });
+// friendSchema.index({ owner: 1, friendPhone: 1 }, { sparse: true });
+friendSchema.index(
+    { owner: 1, friend: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { friend: { $exists: true, $ne: null } },
+    },
+);
+
+friendSchema.index(
+    { owner: 1, friendPhone: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { friendPhone: { $exists: true, $ne: null } },
+    },
+);
+friendSchema.index(
+    { owner: 1, friendEmail: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { friendEmail: { $exists: true, $ne: null } },
+    },
+);
 
 // ─── Recompute balance + expenseCount + lastTransactionDate ───
 // Runs every time transactions array is modified.
