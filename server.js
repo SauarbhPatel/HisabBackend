@@ -75,6 +75,7 @@ app.use("/api/expenses", require("./src/routes/expenseRoutes"));
 app.use("/api/friends", require("./src/routes/friendRoutes"));
 app.use("/api/groups", require("./src/routes/groupRoutes"));
 app.use("/api/dashboard", require("./src/routes/dashboardRoutes"));
+app.use("/api/reports", require("./src/routes/reportsRoutes"));
 
 // ─── Health Check ────────────────────────────────────────────
 app.get("/api/health", (req, res) => {

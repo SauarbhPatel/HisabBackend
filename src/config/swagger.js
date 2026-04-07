@@ -58,6 +58,8 @@ const options = {
                 description:
                     "Authentication — Signup, Login, OTP, Password Reset",
             },
+            { name: "Dashboard", description: "Home Screen Data" },
+            { name: "Reports", description: "Spending & Income Reports" },
             { name: "Friends", description: "Friends & Personal Balances" },
             { name: "Groups", description: "Groups & Shared Expenses" },
             { name: "Expenses", description: "Personal Expense Tracking" },
