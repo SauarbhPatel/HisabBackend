@@ -182,19 +182,38 @@ router.use(protect);
  *               split_month:
  *                 summary: useCase=split, period=month
  *                 value:
- *                   response: { response_code: "200", response_message: "Report fetched successfully." }
+ *                   response:
+ *                     response_code: "200"
+ *                     response_message: "Report fetched successfully."
  *                   data:
  *                     report:
  *                       useCase: split
  *                       period: month
- *                       monthKeys: ["2026-03"]
+ *                       monthKeys:
+ *                         - "2026-03"
  *                       split:
  *                         totalSpent: 8940
  *                         topCategories:
- *                           - { category: food, icon: "🍕", label: "Food & Drinks", total: 3200, count: 8 }
- *                           - { category: bills, icon: "⚡", label: "Bills & Utilities", total: 2400, count: 3 }
- *                           - { category: travel, icon: "🚌", label: "Travel", total: 1850, count: 6 }
- *                           - { category: entertainment, icon: "🎬", label: "Fun & Entertainment", total: 900, count: 2 }
+ *                           - category: food
+ *                             icon: "🍕"
+ *                             label: "Food & Drinks"
+ *                             total: 3200
+ *                             count: 8
+ *                           - category: bills
+ *                             icon: "⚡"
+ *                             label: "Bills & Utilities"
+ *                             total: 2400
+ *                             count: 3
+ *                           - category: travel
+ *                             icon: "🚌"
+ *                             label: "Travel"
+ *                             total: 1850
+ *                             count: 6
+ *                           - category: entertainment
+ *                             icon: "🎬"
+ *                             label: "Fun & Entertainment"
+ *                             total: 900
+ *                             count: 2
  *                         friends:
  *                           owedToYou: 5440
  *                           youOwe: 3200
@@ -202,24 +221,39 @@ router.use(protect);
  *               freelance_month:
  *                 summary: useCase=freelance, period=month
  *                 value:
- *                   response: { response_code: "200", response_message: "Report fetched successfully." }
+ *                   response:
+ *                     response_code: "200"
+ *                     response_message: "Report fetched successfully."
  *                   data:
  *                     report:
  *                       useCase: freelance
  *                       period: month
- *                       monthKeys: ["2026-03"]
+ *                       monthKeys:
+ *                         - "2026-03"
  *                       freelance:
  *                         totalIncome: 34000
  *                         totalDevPaid: 8500
  *                         netProfit: 25500
  *                         projectIncomeList:
- *                           - { project: "School ERP (March)", client: "School ERP Client", amount: 10000, date: "2026-03-20T00:00:00.000Z" }
- *                           - { project: "Flatshare Karo (Dev)", client: "Flatshare Karo", amount: 7000, date: "2026-02-25T00:00:00.000Z" }
+ *                           - project: "School ERP (March)"
+ *                             client: "School ERP Client"
+ *                             amount: 10000
+ *                             date: "2026-03-20T00:00:00.000Z"
+ *                           - project: "Flatshare Karo (Dev)"
+ *                             client: "Flatshare Karo"
+ *                             amount: 7000
+ *                             date: "2026-02-25T00:00:00.000Z"
  *                         incomeByClient:
- *                           - { client: "School ERP Client", total: 12500 }
- *                           - { client: "Flatshare Karo", total: 11000 }
- *                           - { client: "Maksoft Technologies", total: 5500 }
- *                         profitAnalysis: { totalIncome: 34000, totalDevPaid: 8500, netProfit: 25500 }
+ *                           - client: "School ERP Client"
+ *                             total: 12500
+ *                           - client: "Flatshare Karo"
+ *                             total: 11000
+ *                           - client: "Maksoft Technologies"
+ *                             total: 5500
+ *                         profitAnalysis:
+ *                           totalIncome: 34000
+ *                           totalDevPaid: 8500
+ *                           netProfit: 25500
  */
 router.get("/summary", getReportSummary);
 
@@ -271,12 +305,23 @@ router.get("/summary", getReportSummary);
  *             example:
  *               data:
  *                 period: month
- *                 monthKeys: ["2026-03"]
+ *                 monthKeys:
+ *                   - "2026-03"
  *                 totalSpent: 8940
  *                 topCategories:
- *                   - { category: food, icon: "🍕", label: "Food & Drinks", total: 3200, count: 8 }
- *                   - { category: bills, icon: "⚡", label: "Bills & Utilities", total: 2400, count: 3 }
- *                 byMonth: [{ monthKey: "2026-03", total: 8940 }]
+ *                   - category: food
+ *                     icon: "🍕"
+ *                     label: "Food & Drinks"
+ *                     total: 3200
+ *                     count: 8
+ *                   - category: bills
+ *                     icon: "⚡"
+ *                     label: "Bills & Utilities"
+ *                     total: 2400
+ *                     count: 3
+ *                 byMonth:
+ *                   - monthKey: "2026-03"
+ *                     total: 8940
  */
 router.get("/spending", getSpendingReport);
 
@@ -338,12 +383,20 @@ router.get("/spending", getSpendingReport);
  *                 totalDevPaid: 8500
  *                 netProfit: 25500
  *                 incomeByClient:
- *                   - { client: "School ERP Client", total: 12500 }
- *                   - { client: "Flatshare Karo", total: 11000 }
- *                   - { client: "Maksoft Technologies", total: 5500 }
+ *                   - client: "School ERP Client"
+ *                     total: 12500
+ *                   - client: "Flatshare Karo"
+ *                     total: 11000
+ *                   - client: "Maksoft Technologies"
+ *                     total: 5500
  *                 projectIncomeList:
- *                   - { project: "School ERP (March)", amount: 10000, date: "2026-03-20T00:00:00.000Z" }
- *                 profitAnalysis: { totalIncome: 34000, totalDevPaid: 8500, netProfit: 25500 }
+ *                   - project: "School ERP (March)"
+ *                     amount: 10000
+ *                     date: "2026-03-20T00:00:00.000Z"
+ *                 profitAnalysis:
+ *                   totalIncome: 34000
+ *                   totalDevPaid: 8500
+ *                   netProfit: 25500
  */
 router.get("/income", getIncomeReport);
 
@@ -396,8 +449,12 @@ router.get("/income", getIncomeReport);
  *                 friendCount: 4
  *                 settledCount: 1
  *                 topOwed:
- *                   - { name: "Neha Verma", balance: 4300, expenseCount: 7 }
- *                   - { name: "Amit Sharma", balance: 1140, expenseCount: 3 }
+ *                   - name: "Neha Verma"
+ *                     balance: 4300
+ *                     expenseCount: 7
+ *                   - name: "Amit Sharma"
+ *                     balance: 1140
+ *                     expenseCount: 3
  */
 router.get("/friends", getFriendsReport);
 

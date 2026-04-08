@@ -161,10 +161,10 @@ exports.createProject = async (req, res, next) => {
             developers,
         } = req.body;
 
-        if (!name || !client || !startDate || !totalPrice)
+        if (!name || !client || !startDate || !totalPrice || !type.trim())
             return sendError(
                 res,
-                "name, client, startDate and totalPrice are required.",
+                "name, type, client, startDate and totalPrice are required.",
                 "400",
             );
         if (isNaN(Number(totalPrice)) || Number(totalPrice) <= 0)
@@ -174,24 +174,25 @@ exports.createProject = async (req, res, next) => {
                 "400",
             );
 
-        const validTypes = [
-            "Development",
-            "UI/UX Design",
-            "Deployment",
-            "Maintenance",
-            "Mobile App",
-            "Web App",
-            "API Integration",
-            "Other",
-        ];
-        if (type && !validTypes.includes(type))
-            return sendError(
-                res,
-                `Invalid type. Valid: ${validTypes.join(", ")}`,
-                "400",
-            );
+        // const validTypes = [
+        //     "Development",
+        //     "UI/UX Design",
+        //     "Deployment",
+        //     "Maintenance",
+        //     "Mobile App",
+        //     "Web App",
+        //     "API Integration",
+        //     "Other",
+        // ];
+        // if (type && !validTypes.includes(type))
+        //     return sendError(
+        //         res,
+        //         `Invalid type. Valid: ${validTypes.join(", ")}`,
+        //         "400",
+        //     );
 
         let devSlots = [];
+        let devPaymentUpdates = []; // 🔥 NEW
         if (developers && developers.length) {
             for (const d of developers) {
                 if (!d.developer || !d.agreedAmount) continue;
@@ -211,6 +212,18 @@ exports.createProject = async (req, res, next) => {
                     agreedAmount: Number(d.agreedAmount),
                     status: "active",
                 });
+                // 🔥 STORE PAYMENT UPDATE
+                devPaymentUpdates.push({
+                    updateOne: {
+                        filter: { _id: dev._id },
+                        update: {
+                            $inc: {
+                                totalPending: agreedAmount, // ✅ ADD pending
+                                projectCount: 1, // optional (merge update)
+                            },
+                        },
+                    },
+                });
             }
         }
 
@@ -227,13 +240,16 @@ exports.createProject = async (req, res, next) => {
             developers: devSlots,
         });
 
-        if (devSlots.length) {
-            await Developer.updateMany(
-                { _id: { $in: devSlots.map((d) => d.developer) } },
-                { $inc: { projectCount: 1 } },
-            );
+        // if (devSlots.length) {
+        //     await Developer.updateMany(
+        //         { _id: { $in: devSlots.map((d) => d.developer) } },
+        //         { $inc: { projectCount: 1 } },
+        //     );
+        // }
+        // 🔥 BULK UPDATE (Better performance)
+        if (devPaymentUpdates.length) {
+            await Developer.bulkWrite(devPaymentUpdates);
         }
-
         try {
             await updateClientStats(project.client, req.user.id);
         } catch (_) {}

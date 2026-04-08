@@ -78,16 +78,16 @@ const projectSchema = new mongoose.Schema(
         type: {
             type: String,
             trim: true,
-            enum: [
-                "Development",
-                "UI/UX Design",
-                "Deployment",
-                "Maintenance",
-                "Mobile App",
-                "Web App",
-                "API Integration",
-                "Other",
-            ],
+            // enum: [
+            //     "Development",
+            //     "UI/UX Design",
+            //     "Deployment",
+            //     "Maintenance",
+            //     "Mobile App",
+            //     "Web App",
+            //     "API Integration",
+            //     "Other",
+            // ],
             default: "Development",
         },
         client: {

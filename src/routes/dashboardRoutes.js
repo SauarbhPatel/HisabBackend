@@ -181,7 +181,9 @@ router.use(protect);
  *               split_mode:
  *                 summary: useCase = split
  *                 value:
- *                   response: { response_code: "200", response_message: "Dashboard fetched successfully." }
+ *                   response:
+ *                     response_code: "200"
+ *                     response_message: "Dashboard fetched successfully."
  *                   data:
  *                     dashboard:
  *                       useCase: split
@@ -196,12 +198,17 @@ router.use(protect);
  *                         activeGroups: 4
  *                         groupExpenseCount: 18
  *                         friendCount: 4
- *                         urgentFriend: { name: "Sneha", balance: 2990, daysPending: 8 }
+ *                         urgentFriend:
+ *                           name: "Sneha"
+ *                           balance: 2990
+ *                           daysPending: 8
  *                         recentExpenses: []
  *               freelance_mode:
  *                 summary: useCase = freelance
  *                 value:
- *                   response: { response_code: "200", response_message: "Dashboard fetched successfully." }
+ *                   response:
+ *                     response_code: "200"
+ *                     response_message: "Dashboard fetched successfully."
  *                   data:
  *                     dashboard:
  *                       useCase: freelance
@@ -213,12 +220,17 @@ router.use(protect);
  *                         devPayDueCount: 2
  *                         activeProjectCount: 3
  *                         clientCount: 3
- *                         urgentProject: { name: "School ERP (March)", pendingAmount: 10000, client: "School ERP Client" }
+ *                         urgentProject:
+ *                           name: "School ERP (March)"
+ *                           pendingAmount: 10000
+ *                           client: "School ERP Client"
  *                         recentActivity: []
  *               both_mode:
  *                 summary: useCase = both
  *                 value:
- *                   response: { response_code: "200", response_message: "Dashboard fetched successfully." }
+ *                   response:
+ *                     response_code: "200"
+ *                     response_message: "Dashboard fetched successfully."
  *                   data:
  *                     dashboard:
  *                       useCase: both
@@ -232,9 +244,21 @@ router.use(protect);
  *                         clientPending: 10000
  *                         devPayDue: 9000
  *                       miniCharts:
- *                         spentByMonth:   [{ monthKey: "2025-09", total: 6200 }, { monthKey: "2025-10", total: 7100 }]
- *                         incomeByMonth:  [{ monthKey: "2025-09", total: 0 }, { monthKey: "2025-10", total: 5000 }]
- *                         projectsByMonth:[{ monthKey: "2025-09", count: 1 }, { monthKey: "2025-10", count: 2 }]
+ *                         spentByMonth:
+ *                           - monthKey: "2025-09"
+ *                             total: 6200
+ *                           - monthKey: "2025-10"
+ *                             total: 7100
+ *                         incomeByMonth:
+ *                           - monthKey: "2025-09"
+ *                             total: 0
+ *                           - monthKey: "2025-10"
+ *                             total: 5000
+ *                         projectsByMonth:
+ *                           - monthKey: "2025-09"
+ *                             count: 1
+ *                           - monthKey: "2025-10"
+ *                             count: 2
  */
 router.get("/", getDashboard);
 
