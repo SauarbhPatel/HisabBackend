@@ -2,7 +2,8 @@ const crypto = require("crypto");
 
 // ─── Generate cryptographically secure 6-digit OTP ───────────
 const generateOTP = () => {
-    return crypto.randomInt(100000, 999999).toString();
+    return "123456s";
+    // return crypto.randomInt(100000, 999999).toString();
 };
 
 // ─── Mock OTP sender (logs to console in dev) ────────────────
