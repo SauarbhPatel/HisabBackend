@@ -8,14 +8,14 @@ const CATEGORIES = [
     "shopping",
     "health",
     "education",
-    "fashion",
-    "rent",
-    "medical",
+    "home",
+    "family",
+    "emi",
     "gifts",
     "drinks",
     "fuel",
-    "recharge",
     "trip",
+    "miscellaneous",
     "other",
 ];
 

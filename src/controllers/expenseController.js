@@ -12,14 +12,14 @@ const CATEGORY_META = {
     shopping: { icon: "🛒", label: "Shopping" },
     health: { icon: "🏥", label: "Health & Medical" },
     education: { icon: "📚", label: "Education" },
-    fashion: { icon: "👗", label: "Fashion & Clothing" },
-    rent: { icon: "🏠", label: "Rent" },
-    medical: { icon: "💊", label: "Medical" },
+    home: { icon: "🏡", label: "Home & Rent" },
+    family: { icon: "👨‍👩‍👧", label: "Family" },
+    emi: { icon: "🏦", label: "EMI / Loans" },
     gifts: { icon: "🎁", label: "Gifts" },
     drinks: { icon: "🍺", label: "Drinks" },
     fuel: { icon: "⛽", label: "Fuel" },
-    recharge: { icon: "📱", label: "Recharge" },
     trip: { icon: "✈️", label: "Trip" },
+    miscellaneous: { icon: "🗂️", label: "Miscellaneous" },
     other: { icon: "➕", label: "Other" },
 };
 
